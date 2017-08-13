@@ -16,7 +16,7 @@ import SafariServices
 
 class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, NSFetchedResultsControllerDelegate {
     
-    let wormhole = MMWormhole(applicationGroupIdentifier: "group.adam.DownTube", optionalDirectory: nil)
+    let wormhole = MMWormhole(applicationGroupIdentifier: "group.honghaoz.DownTube", optionalDirectory: nil)
     
     var videoManager: VideoManager!
     var fileManager: FileManager = .default
@@ -91,7 +91,7 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
     ///   - enterLinkAction: action that takes place if user wants to enter link
     ///   - browseAction: action that takes place if user wants to browse
     private func buildAndShowAlertControllerForNewVideo(enterLinkAction: @escaping (UIAlertAction) -> Void, browseAction: @escaping (UIAlertAction) -> Void) {
-        let alertVC = UIAlertController(title: "How do you want to find the video?", message: nil, preferredStyle: .actionSheet)
+        let alertVC = UIAlertController(title: "How do you want to find the video?", message: nil, preferredStyle: .alert)
         
         alertVC.addAction(UIAlertAction(title: "Enter Link", style: .default, handler: enterLinkAction))
         

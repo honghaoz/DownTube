@@ -348,7 +348,7 @@
 				TargetAttributes = {
 					6698ABC71D0910AF00985368 = {
 						CreatedOnToolsVersion = 7.3.1;
-						DevelopmentTeam = 6GHQ7P7EHA;
+						DevelopmentTeam = UYW9ZSKZAQ;
 						LastSwiftMigration = 0810;
 						SystemCapabilities = {
 							com.apple.ApplicationGroups.iOS = {
@@ -358,7 +358,7 @@
 					};
 					66BF69AC1CFD2AE3004FEFF7 = {
 						CreatedOnToolsVersion = 7.3.1;
-						DevelopmentTeam = 6GHQ7P7EHA;
+						DevelopmentTeam = UYW9ZSKZAQ;
 						LastSwiftMigration = 0810;
 						SystemCapabilities = {
 							com.apple.ApplicationGroups.iOS = {
@@ -650,10 +650,11 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = DownTubeShareExtension/DownTubeShareExtension.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = UYW9ZSKZAQ;
 				INFOPLIST_FILE = DownTubeShareExtension/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 10.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
-				PRODUCT_BUNDLE_IDENTIFIER = com.adam.DownTube.DownTubeShareExtension;
+				PRODUCT_BUNDLE_IDENTIFIER = com.honghaoz.DownTube.DownTubeShareExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 3.0;
@@ -667,10 +668,11 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = DownTubeShareExtension/DownTubeShareExtension.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = UYW9ZSKZAQ;
 				INFOPLIST_FILE = DownTubeShareExtension/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 10.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
-				PRODUCT_BUNDLE_IDENTIFIER = com.adam.DownTube.DownTubeShareExtension;
+				PRODUCT_BUNDLE_IDENTIFIER = com.honghaoz.DownTube.DownTubeShareExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 3.0;
@@ -776,10 +778,11 @@
 				CODE_SIGN_ENTITLEMENTS = DownTube/DownTube.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = UYW9ZSKZAQ;
 				INFOPLIST_FILE = DownTube/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 10.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				PRODUCT_BUNDLE_IDENTIFIER = com.adam.DownTube;
+				PRODUCT_BUNDLE_IDENTIFIER = com.honghaoz.DownTube;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "";
 				SWIFT_VERSION = 3.0;
@@ -794,10 +797,11 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = DownTube/DownTube.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = UYW9ZSKZAQ;
 				INFOPLIST_FILE = DownTube/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 10.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				PRODUCT_BUNDLE_IDENTIFIER = com.adam.DownTube;
+				PRODUCT_BUNDLE_IDENTIFIER = com.honghaoz.DownTube;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "";
 				SWIFT_VERSION = 3.0;
@@ -811,7 +815,7 @@
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				INFOPLIST_FILE = DownTubeUITests/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
-				PRODUCT_BUNDLE_IDENTIFIER = com.adam.DownTubeUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.honghaoz.DownTubeUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 3.0;
 				TEST_TARGET_NAME = DownTube;
@@ -824,7 +828,7 @@
 			buildSettings = {
 				INFOPLIST_FILE = DownTubeUITests/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
-				PRODUCT_BUNDLE_IDENTIFIER = com.adam.DownTubeUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.honghaoz.DownTubeUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 3.0;
 				TEST_TARGET_NAME = DownTube;
