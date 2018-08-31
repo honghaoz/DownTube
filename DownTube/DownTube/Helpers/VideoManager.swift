@@ -261,8 +261,8 @@ class VideoManager: NSObject, DownloadManagerDelegate {
     
     /// This makes sure that all videos located in the documents folder for DownTube actually have a Video object that they're attached to. This will delete all files not attached to a video.
     func cleanUpDownloadedFiles(from coreDataController: PersistentVideoStore) {
-        let streamUrls = coreDataController.fetchedVideosController.fetchedObjects?.flatMap({ $0.streamUrl }) ?? []
-        let filesThatShouldExist = Set(streamUrls.flatMap({ self.fileNameForVideo(withStreamUrl: $0) }))
+        let streamUrls = coreDataController.fetchedVideosController.fetchedObjects?.compactMap({ $0.streamUrl }) ?? []
+        let filesThatShouldExist = Set(streamUrls.compactMap({ self.fileNameForVideo(withStreamUrl: $0) }))
         
         let contents = try? self.downloadManager.fileManager.contentsOfDirectory(atPath: self.downloadManager.documentsPath as String)
         let videosInFolder = Set(contents?.filter({ $0.hasSuffix("mp4") }) ?? [])
