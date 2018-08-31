@@ -14,32 +14,55 @@ import XCDYouTubeKit
 import MMWormhole
 import SafariServices
 
+private let normalCellRowHeight: CGFloat = 57
+private let downloadingCellRowHeight: CGFloat = 92
+
 class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, NSFetchedResultsControllerDelegate {
     
     let wormhole = MMWormhole(applicationGroupIdentifier: "group.honghaoz.DownTube", optionalDirectory: nil)
     
     var videoManager: VideoManager!
     var fileManager: FileManager = .default
-    var indexPathToReload: IndexPath? //Update the watch status
+    var editVideoIndexPathToReload: IndexPath? //Update the watch and download status from other VCs/background download
     let videoEditingHandler = VideoEditingHandler()
     var streamFromSafariVC = false
     weak var presentedSafariVC: SFSafariViewController?
     var nowPlayingHandler: NowPlayingHandler?
     
+    override var preferredStatusBarStyle: UIStatusBarStyle {
+        return .lightContent
+    }
+    
     override func viewDidLoad() {
         super.viewDidLoad()
-        // Do any additional setup after loading the view, typically from a nib.
+        
+        if #available(iOS 11.0, *) {
+            //Setting up the nav bar for iOS 11, with large titles and search
+            self.navigationController?.navigationBar.prefersLargeTitles = true
+            self.navigationItem.largeTitleDisplayMode = .always
+            
+            let search = UISearchController(searchResultsController: nil)
+            search.searchResultsUpdater = self
+            search.searchBar.tintColor = .red
+            self.navigationItem.searchController = search
+            
+            UITextField.appearance(whenContainedInInstancesOf: [UISearchBar.self]).defaultTextAttributes = [NSAttributedStringKey.foregroundColor.rawValue: UIColor.white]
+
+        }
+        
         self.navigationItem.leftBarButtonItem = self.editButtonItem
 
         let infoButton = UIBarButtonItem(title: "About", style: .plain, target: self, action: #selector(self.showAppInfo(_:)))
         self.navigationItem.rightBarButtonItem = infoButton
         
-        CoreDataController.sharedController.fetchedVideosController.delegate = self
+        PersistentVideoStore.shared.fetchedVideosController.delegate = self
         
         self.videoEditingHandler.delegate = self
         self.videoManager = VideoManager(delegate: self, fileManager: self.fileManager)
         
         self.videoManager.addVideosFromSharedArray()
+        
+        self.registerForPreviewing(with: self, sourceView: self.tableView)
         
         //Wormhole between extension and app
         self.wormhole.listenForMessage(withIdentifier: "youTubeUrl") { messageObject in
@@ -57,12 +80,17 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
         
         // Deletes any files that shouldn't be there
         DispatchQueue.global(qos: .background).async {
-            self.videoManager.cleanUpDownloadedFiles(from: CoreDataController.sharedController)
+            self.videoManager.cleanUpDownloadedFiles(from: PersistentVideoStore.shared)
+            self.videoManager.checkIfAnyVideosNeedToBeDownloaded()
         }
         
         //Need to initialize so no error when trying to save to them
-        _ = CoreDataController.sharedController.fetchedVideosController
-        _ = CoreDataController.sharedController.fetchedStreamingVideosController
+        _ = PersistentVideoStore.shared.fetchedVideosController
+        _ = PersistentVideoStore.shared.fetchedStreamingVideosController
+        
+        //Videos downloaded in background
+        self.checkIfVideosDownloadedInBackground()
+        NotificationCenter.default.addObserver(self, selector: #selector(self.checkIfVideosDownloadedInBackground), name: Notification.Name.UIApplicationDidBecomeActive, object: nil)
     }
     
     override func viewDidAppear(_ animated: Bool) {
@@ -71,8 +99,10 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
         //Whenever the view controller appears, no media items are playing
         self.nowPlayingHandler = nil
         
-        if let indexPath = self.indexPathToReload {
-            self.tableView.reloadRows(at: [indexPath], with: .none)
+        //If video edited
+        if let indexPath = self.editVideoIndexPathToReload {
+            self.tableView.reloadRows(at: [indexPath], with: .automatic)
+            self.editVideoIndexPathToReload = nil
         }
     }
 
@@ -81,6 +111,7 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
      
      - parameter sender: button that sent the action
      */
+    @objc
     func showAppInfo(_ sender: AnyObject) {
         self.performSegue(withIdentifier: "ShowAppInfo", sender: self)
     }
@@ -91,7 +122,7 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
     ///   - enterLinkAction: action that takes place if user wants to enter link
     ///   - browseAction: action that takes place if user wants to browse
     private func buildAndShowAlertControllerForNewVideo(enterLinkAction: @escaping (UIAlertAction) -> Void, browseAction: @escaping (UIAlertAction) -> Void) {
-        let alertVC = UIAlertController(title: "How do you want to find the video?", message: nil, preferredStyle: .alert)
+        let alertVC = UIAlertController(title: "How do you want to find the video?", message: nil, preferredStyle: UIDevice.current.userInterfaceIdiom == .phone ? .actionSheet : .alert)
         
         alertVC.addAction(UIAlertAction(title: "Enter Link", style: .default, handler: enterLinkAction))
         
@@ -102,13 +133,21 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
         self.present(alertVC, animated: true, completion: nil)
         
     }
+    
+    /// Checks if any videos downloaded in background, and if they are, reloads the rows
+    @objc
+    func checkIfVideosDownloadedInBackground() {
+        let indexPaths = self.videoManager.checkIfAnyVideosDownloadedSuccessfully()
+        
+        self.tableView.reloadRows(at: indexPaths, with: .none)
+    }
 
     /**
      Presents a UIAlertController that gets youtube video URL from user then downloads the video
      
      - parameter sender: button
      */
-    @IBAction func downloadVideoAction(_ sender: AnyObject) {
+    @IBAction func startDownloadingVideoAction(_ sender: AnyObject) {
         self.buildAndShowAlertControllerForNewVideo(enterLinkAction: { [unowned self] _ in
             self.buildAndShowUrlGettingAlertController("Download") { text in
                 self.startDownloadOfVideoInfoFor(text)
@@ -123,7 +162,7 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
      
      - parameter sender: button
      */
-    @IBAction func streamVideoAction(_ sender: AnyObject) {
+    @IBAction func startStreamingVideoAction(_ sender: AnyObject) {
         self.buildAndShowAlertControllerForNewVideo(enterLinkAction: { [unowned self] _ in
             self.buildAndShowUrlGettingAlertController("Stream") { text in
                 self.startStreamOfVideoInfoFor(text)
@@ -158,9 +197,11 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
         }
     }
     
-    /// Shows an SFSafariViewController with youtube loaded
-    func showSafariVC() -> SFSafariViewController {
-        let vc = SFSafariViewController(url: URL(string: "https://youtube.com")!)
+    /// Shows an SFSafariViewController. Assumes url is valid
+    func showSafariVC(with urlString: String = "https://youtube.com") -> SFSafariViewController {
+        let vc = SFSafariViewController(url: URL(string: urlString)!)
+        vc.preferredBarTintColor = .black
+        vc.preferredControlTintColor = .white
         self.present(vc, animated: true, completion: nil)
         return vc
     }
@@ -178,7 +219,7 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
             let textField = alertController.textFields![0]
             
             if let text = textField.text {
-                if text.characters.count > 10 {
+                if text.count > 10 {
                     completion(text)
                 } else {
                     self.showErrorAlertControllerWithMessage("URL too short to be valid")
@@ -205,11 +246,12 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
      
      - returns:  button for accessory keyboard view
     */
+    // swift
     func buildAccessoryButton() -> UIView {
         let button = UIButton(frame: CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: 40))
         button.setTitle("Paste from clipboard", for: UIControlState())
-        button.backgroundColor = UIColor(colorLiteralRed: 150/256, green: 150/256, blue: 150/256, alpha: 1)
-        button.setTitleColor(UIColor(colorLiteralRed: 75/256, green: 75/256, blue: 75/256, alpha: 1), for: .highlighted)
+        button.backgroundColor = #colorLiteral(red: 0.5882352941, green: 0.5882352941, blue: 0.5882352941, alpha: 1)
+        button.setTitleColor(#colorLiteral(red: 0.2941176471, green: 0.2941176471, blue: 0.2941176471, alpha: 1), for: .highlighted)
         button.addTarget(self, action: #selector(self.pasteFromClipboard), for: .touchUpInside)
         
         return button
@@ -218,6 +260,7 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
     /**
      Pastes the text from the clipboard in the showing alert vc, if it exists
     */
+    @objc
     func pasteFromClipboard() {
         if let alertVC = self.presentedViewController as? UIAlertController {
             alertVC.textFields![0].text = UIPasteboard.general.string
@@ -232,51 +275,33 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
     func startDownloadOfVideoInfoFor(_ url: String) {
         UIApplication.shared.isNetworkActivityIndicatorVisible = true
         //Gets the video id, which is the last 11 characters of the string
-        XCDYouTubeClient.default().getVideoWithIdentifier(String(url.characters.suffix(11))) { video, error in
-            self.videoObject(video, downloadedForVideoAt: url, error: error as NSError?)
+        XCDYouTubeClient.default().getVideoWithIdentifier(String(url.suffix(11))) { video, error in
+            self.videoManager.videoObject(video, downloadedForVideoAt: url, error: error as NSError?)
             UIApplication.shared.isNetworkActivityIndicatorVisible = false
             
         }
     }
     
+    /// Starts the stream of a video
+    ///
+    /// - Parameter youTubeUrl: youtube url for the video
     func startStreamOfVideoInfoFor(_ youTubeUrl: String) {
         UIApplication.shared.isNetworkActivityIndicatorVisible = true
-        //Gets the video id, which is the last 11 characters of the string
-        XCDYouTubeClient.default().getVideoWithIdentifier(String(youTubeUrl.characters.suffix(11))) { video, error in
+        
+        self.videoManager.getStreamInfo(for: youTubeUrl) { [unowned self] url, streamingVideo, error in
             
-            if let error = error {
-                self.showErrorAlertControllerWithMessage(error.localizedDescription)
+            UIApplication.shared.isNetworkActivityIndicatorVisible = false
+            
+            guard let url = url, var streamingVideo = streamingVideo, error == nil else {
+                self.showErrorAlertControllerWithMessage(error!.localizedDescription)
                 return
             }
             
-            if let streamUrl = self.videoManager.highestQualityStreamUrlFor(video), let url = URL(string: streamUrl) {
-                
-                //Creating the fetch request, looking for the video with the same streamUrl
-                let fetchRequest: NSFetchRequest<StreamingVideo> = StreamingVideo.fetchRequest()
-                fetchRequest.predicate = NSPredicate(format: "youtubeUrl == %@", youTubeUrl)
-                
-                do {
-                    let existingVideos = try CoreDataController.sharedController.managedObjectContext.fetch(fetchRequest)
-                    var videoInCoreData: StreamingVideo
-                    
-                    if let existingVideo = existingVideos.first {
-                        videoInCoreData = existingVideo
-                    } else {
-                        videoInCoreData = CoreDataController.sharedController.createNewStreamingVideo(youTubeUrl: youTubeUrl, streamUrl: streamUrl, videoObject: video)
-                    }
-                    
-                    //Now that a video has either been found in core data or created, get the watch progress and send it to the AVPlayer
-                    self.playVideo(with: url, video: videoInCoreData) { newProgress in
-                        videoInCoreData.watchProgress = newProgress
-                        CoreDataController.sharedController.saveContext()
-                    }
-                } catch let error {
-                    print("An error occurred saving the video: \(error)")
-                }
-            
+            //Now that a video has either been found in core data or created, get the watch progress and send it to the AVPlayer
+            self.playVideo(with: url, video: streamingVideo) { newProgress in
+                streamingVideo.watchProgress = newProgress
+                PersistentVideoStore.shared.save()
             }
-            
-            UIApplication.shared.isNetworkActivityIndicatorVisible = false
             
         }
     }
@@ -284,52 +309,33 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
     // MARK: - Table View
 
     override func numberOfSections(in tableView: UITableView) -> Int {
-        return CoreDataController.sharedController.fetchedVideosController.sections?.count ?? 0
+        return PersistentVideoStore.shared.fetchedVideosController.sections?.count ?? 0
     }
 
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        let sectionInfo = CoreDataController.sharedController.fetchedVideosController.sections![section]
+        let sectionInfo = PersistentVideoStore.shared.fetchedVideosController.sections![section]
         return sectionInfo.numberOfObjects
     }
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "VideoTableViewCell", for: indexPath) as! VideoTableViewCell
-        let video = CoreDataController.sharedController.fetchedVideosController.object(at: indexPath)
-        self.configureCell(cell, withVideo: video)
-        
-        cell.delegate = self
+        let video = PersistentVideoStore.shared.fetchedVideosController.object(at: indexPath)
+        var download: Download?
+        if let streamUrl = video.streamUrl, let downloadingVideo = self.videoManager.downloadManager.getDownloadWith(streamUrl: streamUrl) {
+            download = downloadingVideo
+        }
         
         let holdGestureRecognizer = UILongPressGestureRecognizer(target: self, action: #selector(self.handleLongTouchWithGestureRecognizer(_:)))
         holdGestureRecognizer.minimumPressDuration = 1
         cell.addGestureRecognizer(holdGestureRecognizer)
         
-        cell.setWatchIndicatorState(video.watchProgress)
-        
-        //Only show the download controls if video is currently downloading
-        var showDownloadControls = false
-        if let streamUrl = video.streamUrl, let download = self.videoManager.activeDownloads[streamUrl] {
-            showDownloadControls = true
-            cell.progressView.progress = download.progress
-            cell.progressLabel.text = (download.isDownloading) ? "Downloading..." : "Paused"
-            let title = (download.isDownloading) ? "Pause" : "Resume"
-            cell.pauseButton.setTitle(title, for: UIControlState())
-        }
-        cell.progressView.isHidden = !showDownloadControls
-        cell.progressLabel.isHidden = !showDownloadControls
-        
-        //Hiding or showing the download button
-        let downloaded = self.videoManager.localFileExistsFor(video)
-        cell.selectionStyle = downloaded ? .gray : .none
-        
-        //Hiding or showing the cancel and pause buttons
-        cell.pauseButton.isHidden = !showDownloadControls
-        cell.cancelButton.isHidden = !showDownloadControls
+        cell.setUp(with: video, download: download, isDownloaded: self.videoManager.localFileExistsFor(video), delegate: self)
         
         return cell
     }
     
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-        let video = CoreDataController.sharedController.fetchedVideosController.object(at: indexPath)
+        let video = PersistentVideoStore.shared.fetchedVideosController.object(at: indexPath)
         if self.videoManager.localFileExistsFor(video) {
             self.playDownload(video, atIndexPath: indexPath)
         }
@@ -342,27 +348,16 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
     }
     
     override func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
-        return self.isCellAtIndexPathDownloading(indexPath) ? 92 : 57
+        let video = PersistentVideoStore.shared.fetchedVideosController.object(at: indexPath)
+        return (video.isDoneDownloading?.boolValue ?? true) ? normalCellRowHeight : downloadingCellRowHeight
     }
 
     override func tableView(_ tableView: UITableView, commit editingStyle: UITableViewCellEditingStyle, forRowAt indexPath: IndexPath) {
         if editingStyle == .delete {
-            _ = self.deleteDownloadedVideo(at: indexPath)
+            _ = self.videoManager.deleteDownloadedVideo(at: indexPath)
             
-            self.deleteVideoObject(at: indexPath)
+            self.videoManager.deleteVideoObject(at: indexPath)
         }
-    }
-
-    func configureCell(_ cell: VideoTableViewCell, withVideo video: Video) {
-        let components = (Calendar.current as NSCalendar).components([.day, .month, .year], from: video.created! as Date)
-        
-        cell.videoNameLabel.text = video.title
-        
-        var labelText = "Downloaded"
-        if let year = components.year, let month = components.month, let day = components.day {
-            labelText += " on \(year)/\(month)/\(day)"
-        }
-        cell.dateLabel.text = labelText
     }
 
     func controllerWillChangeContent(_ controller: NSFetchedResultsController<NSFetchRequestResult>) {
@@ -371,25 +366,18 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
 
     func controller(_ controller: NSFetchedResultsController<NSFetchRequestResult>, didChange sectionInfo: NSFetchedResultsSectionInfo, atSectionIndex sectionIndex: Int, for type: NSFetchedResultsChangeType) {
         switch type {
-            case .insert:
-                self.tableView.insertSections(IndexSet(integer: sectionIndex), with: .fade)
-            case .delete:
-                self.tableView.deleteSections(IndexSet(integer: sectionIndex), with: .fade)
-            default:
-                return
+        case .insert:       self.tableView.insertSections(IndexSet(integer: sectionIndex), with: .fade)
+        case .delete:       self.tableView.deleteSections(IndexSet(integer: sectionIndex), with: .fade)
+        default:            return
         }
     }
 
     func controller(_ controller: NSFetchedResultsController<NSFetchRequestResult>, didChange anObject: Any, at indexPath: IndexPath?, for type: NSFetchedResultsChangeType, newIndexPath: IndexPath?) {
         switch type {
-            case .insert:
-                tableView.insertRows(at: [newIndexPath!], with: .fade)
-            case .delete:
-                tableView.deleteRows(at: [indexPath!], with: .fade)
-            case .update:
-                self.configureCell((tableView.cellForRow(at: indexPath!)! as! VideoTableViewCell), withVideo: anObject as! Video)
-            case .move:
-                tableView.moveRow(at: indexPath!, to: newIndexPath!)
+        case .insert:       tableView.insertRows(at: [newIndexPath!], with: .fade)
+        case .delete:       tableView.deleteRows(at: [indexPath!], with: .fade)
+        case .update:       tableView.reloadRows(at: [indexPath!], with: .automatic)
+        case .move:         tableView.moveRow(at: indexPath!, to: newIndexPath!)
         }
     }
 
@@ -397,96 +385,7 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
         self.tableView.endUpdates()
     }
     
-    // MARK: - Extension helper methods
-    
-    func isCellAtIndexPathDownloading(_ indexPath: IndexPath) -> Bool {
-        let video = CoreDataController.sharedController.fetchedVideosController.object(at: indexPath)
-        if let streamUrl = video.streamUrl {
-            return self.videoManager.activeDownloads[streamUrl] != nil
-        }
-        
-        return false
-    }
-    
     // MARK: - Helper methods
-    
-    /**
-     Called when the video info for a video is downloaded
-     
-     - parameter video:      optional video object that was downloaded, contains stream info, title, etc.
-     - parameter youTubeUrl: youtube URL of the video
-     - parameter error:      optional error
-     */
-    func videoObject(_ video: XCDYouTubeVideo?, downloadedForVideoAt youTubeUrl: String, error: NSError?) {
-        if let videoTitle = video?.title {
-            print("\(videoTitle)")
-            
-            if let video = video, let streamUrl = self.videoManager.highestQualityStreamUrlFor(video) {
-                self.createObjectInCoreDataAndStartDownloadFor(video, withStreamUrl: streamUrl, andYouTubeUrl: youTubeUrl)
-                
-                return
-            }
-            
-        }
-        
-        //Show error to user and remove all errored out videos
-        self.showErrorAndRemoveErroredVideos(error)
-    }
-    
-    /**
-     Creates new video object in core data, saves the information for that video, and starts the download of the video stream
-     
-     - parameter video:      video object
-     - parameter streamUrl:  streaming URL for the video
-     - parameter youTubeUrl: youtube URL for the video (youtube.com/watch?=v...)
-     */
-    func createObjectInCoreDataAndStartDownloadFor(_ video: XCDYouTubeVideo?, withStreamUrl streamUrl: String, andYouTubeUrl youTubeUrl: String) {
-        
-        //Make sure the stream URL doesn't exist already
-        guard self.videoManager.videoIndexForYouTubeUrl(youTubeUrl) == nil else {
-            self.showErrorAlertControllerWithMessage("Video already downloaded")
-            return
-        }
-        
-        let newVideo = CoreDataController.sharedController.createNewVideo(youTubeUrl: youTubeUrl, streamUrl: streamUrl, videoObject: video)
-        
-        //Starts the download of the video
-        self.videoManager.startDownload(newVideo) { index in
-            self.tableView.reloadRows(at: [IndexPath(row: index, section: 0)], with: .none)
-        }
-    }
-    
-    /**
-     Shows error to user in UIAlertController and then removes all errored out videos from core data
-     
-     - parameter error: error from getting the video info
-     */
-    func showErrorAndRemoveErroredVideos(_ error: NSError?) {
-        //Show error to user, remove all unused cells from list
-        DispatchQueue.main.async {
-            if let error = error {
-                print("Couldn't get video: \(error.localizedDescription)")
-            } else {
-                print("Couldn't get video: unknown error")
-            }
-            
-            let message = error?.localizedDescription
-            self.showErrorAlertControllerWithMessage(message)
-        }
-        
-        //Getting all blank videos with no downloaded data
-        var objectsToRemove: [IndexPath] = []
-        for (index, video) in CoreDataController.sharedController.fetchedVideosController.fetchedObjects!.enumerated() where video.streamUrl == nil {
-            objectsToRemove.append(IndexPath(row: index, section: 0))
-        }
-        
-        //Deleting them
-        for indexPath in objectsToRemove {
-            _ = self.deleteDownloadedVideo(at: indexPath)
-            self.deleteVideoObject(at: indexPath)
-        }
-
-    }
     
     /**
      Presents UIAlertController error message to user with ok button
@@ -508,37 +407,6 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
         
     }
     
-    /// Deletes the downloaded video at the specified index path
-    ///
-    /// - Parameter indexPath: indexpath of the video to delete
-    /// - Returns: video that was deleted
-    func deleteDownloadedVideo(at indexPath: IndexPath) -> Video {
-        let video = CoreDataController.sharedController.fetchedVideosController.object(at: indexPath)
-        
-        self.videoManager.cancelDownload(video)
-        _ = self.videoManager.deleteDownloadedVideo(for: video)
-        
-        return video
-    }
-    
-    /**
-     Deletes video object from core data
-     
-     - parameter indexPath: location of the video
-     */
-    func deleteVideoObject(at indexPath: IndexPath) {
-        let video = CoreDataController.sharedController.fetchedVideosController.object(at: indexPath)
-        
-        let context = CoreDataController.sharedController.fetchedVideosController.managedObjectContext
-        context.delete(video)
-        
-        do {
-            try context.save()
-        } catch {
-            abort()
-        }
-    }
-    
     /**
      Plays video in fullscreen player
      
@@ -551,10 +419,55 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
             self.playVideo(with: url, video: video) { [weak self] newProgress in
                 
                 video.watchProgress = newProgress
-                CoreDataController.sharedController.saveContext()
+                PersistentVideoStore.shared.save()
                 
-                self?.indexPathToReload = indexPath
+                self?.editVideoIndexPathToReload = indexPath
             }
+        }
+    }
+    
+    /// Creates a DownTubePlayerViewController with the url to play from and the video that contains the watch progress
+    ///
+    /// - Parameters:
+    ///   - url: url that the VC will play from
+    ///   - video: video that is playing
+    /// - Returns: set up DownTubePlayerViewController
+    private func createPlaybackViewController(with url: URL, video: Watchable) -> (player: AVPlayer, viewController: DownTubePlayerViewController) {
+        let player = AVPlayer(url: url)
+        
+        let playerViewController = DownTubePlayerViewController()
+        playerViewController.updatesNowPlayingInfoCenter = false
+        playerViewController.currentlyPlaying = video
+        playerViewController.actionItemsDelegate = self
+        
+        //Seek to time if the time is saved
+        switch video.watchProgress {
+        case let .partiallyWatched(seconds):
+            player.seek(to: CMTime(seconds: seconds.doubleValue, preferredTimescale: 1))
+        default:    break
+        }
+        
+        playerViewController.player = player
+        
+        return (player, playerViewController)
+    }
+    
+    /// Presents the DownTubePlayerViewController and sets up the NowPlayingInfoCenter for playback
+    ///
+    /// - Parameters:
+    ///   - player: player set up with video
+    ///   - viewController: DownTubePlayerViewController to display
+    ///   - video: video that's being played
+    ///   - progressCallback: callback for when the progress of the video is updated
+    private func present(videoViewController: DownTubePlayerViewController, andSetUpNowPlayingInfoFor player: AVPlayer, video: Watchable, progressCallback: @escaping (WatchState) -> Void) {
+        self.present(videoViewController, animated: true) {
+            player.play()
+            //This sets the name in control center and on the home screen
+            self.nowPlayingHandler = NowPlayingHandler(player: player)
+            self.nowPlayingHandler?.addTimeObserverToPlayer(progressCallback)
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = video.nowPlayingInfo
+            MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPNowPlayingInfoPropertyPlaybackRate] = 1
+            MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPMediaItemPropertyPlaybackDuration] = NSNumber(value: CMTimeGetSeconds(player.currentItem!.duration))
         }
     }
     
@@ -565,29 +478,9 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
     ///   - video: video object (either streaming or downloaded) that is being played
     ///   - progressCallback: called to update the video watch state, called multiple time
     private func playVideo(with url: URL, video: Watchable, progressCallback: @escaping (WatchState) -> Void) {
-        let player = AVPlayer(url: url)
+        let playerObjects = self.createPlaybackViewController(with: url, video: video)
         
-        let playerViewController = AVPlayerViewController()
-        playerViewController.updatesNowPlayingInfoCenter = false
-            
-        //Seek to time if the time is saved
-        switch video.watchProgress {
-        case let .partiallyWatched(seconds):
-            player.seek(to: CMTime(seconds: seconds.doubleValue, preferredTimescale: 1))
-        default:    break
-        }
-        
-        
-        playerViewController.player = player
-        self.present(playerViewController, animated: true) {
-            playerViewController.player?.play()
-            //This sets the name in control center and on the home screen
-            self.nowPlayingHandler = NowPlayingHandler(player: player)
-            self.nowPlayingHandler?.addTimeObserverToPlayer(progressCallback)
-            MPNowPlayingInfoCenter.default().nowPlayingInfo = video.nowPlayingInfo
-            MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPNowPlayingInfoPropertyPlaybackRate] = 1
-            MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPMediaItemPropertyPlaybackDuration] = NSNumber(value: CMTimeGetSeconds(player.currentItem!.duration))
-        }
+        self.present(videoViewController: playerObjects.viewController, andSetUpNowPlayingInfoFor: playerObjects.player, video: video, progressCallback: progressCallback)
     }
     
     /**
@@ -595,6 +488,7 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
      
      - parameter gestureRecognizer: gesture recognizer
      */
+    @objc
     func handleLongTouchWithGestureRecognizer(_ gestureRecognizer: UILongPressGestureRecognizer) {
         if gestureRecognizer.state == .changed || gestureRecognizer.state == .ended {
             
@@ -603,9 +497,9 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
                 return
             }
             
-            let video = CoreDataController.sharedController.fetchedVideosController.object(at: indexPath)
+            let video = PersistentVideoStore.shared.fetchedVideosController.object(at: indexPath)
             
-            let alertController = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
+            let alertController = UIAlertController(title: nil, message: nil, preferredStyle: UIDevice.current.userInterfaceIdiom == .phone ? .actionSheet : .alert)
             
             for action in self.buildActionsForLongPressOn(video: video, at: indexPath) {
                 alertController.addAction(action)
@@ -634,7 +528,7 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
         if video.watchProgress != .watched {
             actions.append(UIAlertAction(title: "Mark as Watched", style: .default) { [unowned self] _ in
                 video.watchProgress = .watched
-                CoreDataController.sharedController.saveContext()
+                PersistentVideoStore.shared.save()
                 self.tableView.reloadRows(at: [indexPath], with: .none)
             })
         }
@@ -643,8 +537,15 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
         if video.watchProgress != .unwatched {
             actions.append(UIAlertAction(title: "Mark as Unwatched", style: .default) { [unowned self] _ in
                 video.watchProgress = .unwatched
-                CoreDataController.sharedController.saveContext()
+                PersistentVideoStore.shared.save()
                 self.tableView.reloadRows(at: [indexPath], with: .none)
+            })
+        }
+        
+        //Opening in youtube
+        if let youtubeUrl = video.youtubeUrl {
+            actions.append(UIAlertAction(title: "Open in YouTube", style: .default) { [unowned self] _ in
+                self.presentedSafariVC = self.showSafariVC(with: youtubeUrl)
             })
         }
         
@@ -674,6 +575,10 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
         return actions
         
     }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
 
 }
 
@@ -682,27 +587,69 @@ class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, 
 extension MasterViewController: VideoTableViewCellDelegate {
     func pauseTapped(_ cell: VideoTableViewCell) {
         if let indexPath = self.tableView.indexPath(for: cell) {
-            let video = CoreDataController.sharedController.fetchedVideosController.object(at: indexPath)
-            self.videoManager.pauseDownload(video)
+            let video = PersistentVideoStore.shared.fetchedVideosController.object(at: indexPath)
+            self.videoManager.downloadManager.pauseDownload(video)
             self.tableView.reloadRows(at: [indexPath], with: .none)
         }
     }
     
     func resumeTapped(_ cell: VideoTableViewCell) {
         if let indexPath = self.tableView.indexPath(for: cell) {
-            let video = CoreDataController.sharedController.fetchedVideosController.object(at: indexPath)
-            self.videoManager.resumeDownload(video)
+            let video = PersistentVideoStore.shared.fetchedVideosController.object(at: indexPath)
+            self.videoManager.downloadManager.resumeVideoDownload(video)
             self.tableView.reloadRows(at: [indexPath], with: .none)
         }
     }
     
     func cancelTapped(_ cell: VideoTableViewCell) {
         if let indexPath = tableView.indexPath(for: cell) {
-            let video = CoreDataController.sharedController.fetchedVideosController.object(at: indexPath)
-            self.videoManager.cancelDownload(video)
+            let video = PersistentVideoStore.shared.fetchedVideosController.object(at: indexPath)
+            self.videoManager.downloadManager.cancelDownload(video)
             tableView.reloadRows(at: [indexPath], with: .none)
-            self.deleteVideoObject(at: indexPath)
+            self.videoManager.deleteVideoObject(at: indexPath)
         }
+    }
+}
+
+// MARK: 3D Touch
+
+extension MasterViewController: UIViewControllerPreviewingDelegate {
+    func previewingContext(_ previewingContext: UIViewControllerPreviewing, viewControllerForLocation location: CGPoint) -> UIViewController? {
+        guard let indexPath = self.tableView.indexPathForRow(at: location) else { return nil }
+        
+        //Get the index path for the cell
+        let video = PersistentVideoStore.shared.fetchedVideosController.object(at: indexPath)
+        if let indexPath = self.tableView.indexPathForRow(at: location), let urlString = video.streamUrl, let url = self.videoManager.localFilePathForUrl(urlString) {
+            //This will show the blur correctly
+            let rectOfCellInTableView = self.tableView.rectForRow(at: indexPath)
+            let rectOfCellInSuperview = self.tableView.convert(rectOfCellInTableView, to: self.view)
+            previewingContext.sourceRect = rectOfCellInSuperview
+            return self.createPlaybackViewController(with: url, video: video).viewController
+        }
+    
+        return nil
+    }
+    
+    func previewingContext(_ previewingContext: UIViewControllerPreviewing, commit viewControllerToCommit: UIViewController) {
+        if let vc = viewControllerToCommit as? DownTubePlayerViewController, let player = vc.player, var video = vc.currentlyPlaying {
+            self.present(videoViewController: vc, andSetUpNowPlayingInfoFor: player, video: video) { newProgress in
+                video.watchProgress = newProgress
+                PersistentVideoStore.shared.save()
+            }
+        }
+    }
+    
+}
+
+// MARK: - DownTubePlayerViewControllerDelegate
+
+extension MasterViewController: DownTubePlayerViewControllerDelegate {
+    func playerViewController(_ playerViewController: DownTubePlayerViewController, requestsToOpenVideoUrlInYouTube urlString: String) {
+        self.presentedSafariVC = self.showSafariVC(with: urlString)
+    }
+    
+    func viewControllerChangedVideoStatus(for video: Watchable?) {
+        self.tableView.reloadData()
     }
 }
 
@@ -718,17 +665,23 @@ extension MasterViewController: VideoManagerDelegate {
     func updateDownloadProgress(_ download: Download, at index: Int, with totalSize: String) {
         DispatchQueue.main.async() {
             if let videoTableViewCell = self.tableView.cellForRow(at: IndexPath(row: index, section: 0)) as? VideoTableViewCell {
-            
-                let done = (download.progress == 1)
                 
-                videoTableViewCell.progressView.isHidden = done
-                videoTableViewCell.progressLabel.isHidden = done
-                videoTableViewCell.progressView.progress = download.progress
-                videoTableViewCell.progressLabel.text = String(format: "%.1f%% of %@", download.progress * 100, totalSize)
-                if done {
-                    self.tableView.reloadRows(at: [IndexPath(row: index, section: 0)], with: .automatic)
+                videoTableViewCell.updateProgress(for: download, totalSize: totalSize)
+                if download.isDone {
+                    let indexPath = IndexPath(row: index, section: 0)
+                    self.tableView.reloadRows(at: [indexPath], with: .automatic)
                 }
             }
         }
+    }
+}
+
+extension MasterViewController: UISearchResultsUpdating {
+    func updateSearchResults(for searchController: UISearchController) {
+        guard let search = searchController.searchBar.text else { return }
+        
+        print("Updating search results, search is \"\(search)\"")
+        PersistentVideoStore.shared.setSearchForDownloadedVideos(search, isDownloaded: nil)
+        self.tableView.reloadData()
     }
 }

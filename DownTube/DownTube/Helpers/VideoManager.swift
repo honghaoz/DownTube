@@ -8,119 +8,168 @@
 
 import Foundation
 import UIKit
+import CoreData
 import XCDYouTubeKit
 
 protocol VideoManagerDelegate: class {
     func reloadRows(_ rows: [IndexPath])
     func updateDownloadProgress(_ download: Download, at index: Int, with totalSize: String)
     func startDownloadOfVideoInfoFor(_ url: String)
+    func showErrorAlertControllerWithMessage(_ message: String?)
 }
 
-class VideoManager: NSObject, URLSessionDelegate, URLSessionDownloadDelegate {
-    let defaultSession = URLSession(configuration: URLSessionConfiguration.default)
-    var dataTask: URLSessionDataTask?
-    var activeDownloads: [String: Download] = [:]
-    
+class VideoManager: NSObject, DownloadManagerDelegate {
     var currentlyEditingVideo: Video?
     
-    lazy var downloadsSession: URLSession = {
-        let configuration = URLSessionConfiguration.background(withIdentifier: "bgSessionConfiguration")
-        let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
-        return session
-    }()
-    
-    weak var delegate: VideoManagerDelegate?
-    var fileManager: FileManager = .default
-    
-    // Path where the video files are stored
-    var documentsPath: String {
-        return NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true)[0]
+    weak var delegate: VideoManagerDelegate? {
+        didSet {
+            self.downloadManager.videoManagerDelegate = self.delegate
+        }
     }
+    var downloadManager: DownloadManager!
     
     init(delegate: VideoManagerDelegate?, fileManager: FileManager) {
         
         super.init()
         
         self.delegate = delegate
-        self.fileManager = fileManager
+        self.downloadManager = DownloadManager(delegate: self, videoManagerDelegate: delegate, fileManager: fileManager)
         
         self.setUpSharedVideoListIfNeeded()
-        
-        //Need to specifically init this because self has to be used in the argument, which isn't formed until here
-        _ = self.downloadsSession
     }
     
-    /**
-     Starts download for video, called when track is added
-     
-     - parameter video:     Video object
-     - parameter onSuccess: closure that is called immediately if the video is valid
-     */
-    func startDownload(_ video: Video, onSuccess completion: (Int) -> Void) {
-        print("Starting download of video \(video.title ?? "unknown video")")
-        if let urlString = video.streamUrl, let url = URL(string: urlString), let index = self.videoIndexForStreamUrl(urlString) {
-            let download = Download(url: urlString)
-            download.downloadTask = self.downloadsSession.downloadTask(with: url)
-            download.downloadTask?.resume()
-            download.isDownloading = true
-            self.activeDownloads[download.url] = download
+    /// Gets the streaming video information for a particular video
+    ///
+    /// - Parameters:
+    ///   - youTubeUrl: youtube url for the video
+    ///   - completion: called when the video info is ready or if there is an error
+    func getStreamInfo(for youTubeUrl: String, completion: @escaping (_ url: URL?, _ video: StreamingVideo?, _ error: Error?) -> Void) {
+        
+        //Gets the video id, which is the last 11 characters of the string
+        XCDYouTubeClient.default().getVideoWithIdentifier(String(youTubeUrl.suffix(11))) { [unowned self] video, error in
             
-            completion(index)
-        }
-    }
-    
-    /**
-     Called when pause button for video is tapped
-     
-     - parameter video: Video object
-     */
-    func pauseDownload(_ video: Video) {
-        print("Startind download")
-        if let urlString = video.streamUrl, let download = self.activeDownloads[urlString] {
-            if download.isDownloading {
-                download.downloadTask?.cancel() { data in
-                    if data != nil {
-                        download.resumeData = data
+            if let error = error {
+                completion(nil, nil, error)
+                return
+            }
+            
+            if let streamUrl = self.highestQualityStreamUrlFor(video), let url = URL(string: streamUrl) {
+                
+                //Creating the fetch request, looking for the video with the same streamUrl
+                let fetchRequest: NSFetchRequest<StreamingVideo> = StreamingVideo.fetchRequest()
+                fetchRequest.predicate = NSPredicate(format: "youtubeUrl == %@", youTubeUrl)
+                
+                do {
+                    let existingVideos = try PersistentVideoStore.shared.managedObjectContext.fetch(fetchRequest)
+                    var videoInCoreData: StreamingVideo
+                    
+                    if let existingVideo = existingVideos.first {
+                        videoInCoreData = existingVideo
+                    } else {
+                        videoInCoreData = PersistentVideoStore.shared.createNewStreamingVideo(youTubeUrl: youTubeUrl, streamUrl: streamUrl, videoObject: video)
                     }
+                    
+                    completion(url, videoInCoreData, nil)
+                    
+                } catch let error {
+                    //Don't alert user
+                    print("An error occurred saving the video: \(error)")
                 }
-                download.isDownloading = false
+                
             }
         }
     }
     
+    // MARK: - Managing videos
+    
     /**
-     Called when the cancel button for a video is tapped
+     Called when the video info for a video is downloaded
      
-     - parameter video: Video object
+     - parameter video:      optional video object that was downloaded, contains stream info, title, etc.
+     - parameter youTubeUrl: youtube URL of the video
+     - parameter error:      optional error
      */
-    func cancelDownload(_ video: Video) {
-        print("Canceling download of video \(video.title ?? "unknown video")")
-        if let urlString = video.streamUrl, let download = self.activeDownloads[urlString] {
-            download.downloadTask?.cancel()
-            self.activeDownloads[urlString] = nil
+    func videoObject(_ video: XCDYouTubeVideo?, downloadedForVideoAt youTubeUrl: String, error: NSError?) {
+        if let videoTitle = video?.title {
+            print("\(videoTitle)")
+            
+            if let video = video, let streamUrl = self.highestQualityStreamUrlFor(video) {
+                self.createObjectInCoreDataAndStartDownloadFor(video, withStreamUrl: streamUrl, andYouTubeUrl: youTubeUrl)
+                
+                return
+            }
+            
+        }
+    }
+    
+    /**
+     Creates new video object in core data, saves the information for that video, and starts the download of the video stream
+     
+     - parameter video:      video object
+     - parameter streamUrl:  streaming URL for the video
+     - parameter youTubeUrl: youtube URL for the video (youtube.com/watch?=v...)
+     */
+    private func createObjectInCoreDataAndStartDownloadFor(_ video: XCDYouTubeVideo?, withStreamUrl streamUrl: String, andYouTubeUrl youTubeUrl: String) {
+        
+        //Make sure the stream URL doesn't exist already
+        guard self.videoIndexForYouTubeUrl(youTubeUrl) == nil else {
+            self.delegate?.showErrorAlertControllerWithMessage("Video already downloaded")
+            return
         }
         
+        let newVideo = PersistentVideoStore.shared.createNewVideo(youTubeUrl: youTubeUrl, streamUrl: streamUrl, videoObject: video)
+        
+        //Starts the download of the video
+        if let index = self.downloadManager.startDownload(newVideo) {
+            self.delegate?.reloadRows([IndexPath(row: index, section: 0)])
+        }
     }
     
     /**
-     Called when the resume button for a video is tapped
+     Deletes video object from core data
      
-     - parameter video: Video object
+     - parameter indexPath: location of the video
      */
-    func resumeDownload(_ video: Video) {
-        print("Resuming download of video \(video.title ?? "unknown video")")
-        if let urlString = video.streamUrl, let download = self.activeDownloads[urlString] {
-            if let resumeData = download.resumeData {
-                download.downloadTask = self.downloadsSession.downloadTask(withResumeData: resumeData)
-                download.downloadTask?.resume()
-                download.isDownloading = true
-            } else if let url = URL(string: download.url) {
-                download.downloadTask = self.downloadsSession.downloadTask(with: url)
-                download.downloadTask?.resume()
-                download.isDownloading = true
+    func deleteVideoObject(at indexPath: IndexPath) {
+        let video = PersistentVideoStore.shared.fetchedVideosController.object(at: indexPath)
+        
+        let context = PersistentVideoStore.shared.fetchedVideosController.managedObjectContext
+        context.delete(video)
+        
+        PersistentVideoStore.shared.save()
+    }
+    
+    /// Deletes the downloaded video at the specified index path
+    ///
+    /// - Parameter indexPath: indexpath of the video to delete
+    /// - Returns: video that was deleted
+    func deleteDownloadedVideo(at indexPath: IndexPath) -> Video {
+        let video = PersistentVideoStore.shared.fetchedVideosController.object(at: indexPath)
+        
+        self.downloadManager.cancelDownload(video)
+        _ = self.deleteDownloadedVideo(for: video)
+        
+        return video
+    }
+    
+    func checkIfAnyVideosDownloadedSuccessfully() -> [IndexPath] {
+        var changedVideoIndexes: [Int] = [] //All changed videos
+        
+        guard let videos = PersistentVideoStore.shared.fetchedVideosController.fetchedObjects else { return [] }
+        
+        for (index, video) in videos.enumerated() {
+            //If the file is there but the video is not done downloading, then the video finished downloading in the background and needs to be updated
+            if self.localFileExistsFor(video) && !(video.isDoneDownloading?.boolValue ?? true) {
+                video.isDoneDownloading = NSNumber(value: true)
+                changedVideoIndexes.append(index)
             }
         }
+        
+        PersistentVideoStore.shared.save()
+        return changedVideoIndexes.map({ IndexPath(item: $0, section: 0) })
     }
+    
+    // MARK: - Getting indexes
     
     /**
      Gets the index of the video for the current download in the fetched results controller
@@ -130,11 +179,7 @@ class VideoManager: NSObject, URLSessionDelegate, URLSessionDownloadDelegate {
      - returns: optional index
      */
     func videoIndexForYouTubeUrl(_ url: String) -> Int? {
-        for (index, video) in CoreDataController.sharedController.fetchedVideosController.fetchedObjects!.enumerated() where url == video.youtubeUrl {
-            return index
-        }
-        
-        return nil
+        return PersistentVideoStore.shared.fetchedVideosController.fetchedObjects?.index(where: { $0.youtubeUrl == url })
     }
     
     /**
@@ -145,26 +190,7 @@ class VideoManager: NSObject, URLSessionDelegate, URLSessionDownloadDelegate {
      - returns: optional index
      */
     func videoIndexForStreamUrl(_ url: String) -> Int? {
-        for (index, video) in CoreDataController.sharedController.fetchedVideosController.fetchedObjects!.enumerated() where url == video.streamUrl {
-            return index
-        }
-        
-        return nil
-    }
-    
-    /**
-     Gets the index of the video for the current download in the fetched results controller
-     
-     - parameter downloadTask: video that is currently downloading
-     
-     - returns: optional index
-     */
-    func videoIndexForDownloadTask(_ downloadTask: URLSessionDownloadTask) -> Int? {
-        if let url = downloadTask.originalRequest?.url?.absoluteString {
-            return self.videoIndexForStreamUrl(url)
-        }
-        
-        return nil
+        return PersistentVideoStore.shared.fetchedVideosController.fetchedObjects?.index(where: { $0.streamUrl == url })
     }
     
     // MARK: - Locations of downloads
@@ -184,7 +210,7 @@ class VideoManager: NSObject, URLSessionDelegate, URLSessionDownloadDelegate {
         let high = query.index(match.lowerBound, offsetBy: 21)
         
         //Only use part of the Url for the file name
-        return query.substring(with: low..<high) + ".mp4"
+        return String(query[low..<high]) + ".mp4"
     }
     
     /**
@@ -197,7 +223,7 @@ class VideoManager: NSObject, URLSessionDelegate, URLSessionDownloadDelegate {
     func localFilePathForUrl(_ streamUrl: String) -> URL? {
         guard let fileName = self.fileNameForVideo(withStreamUrl: streamUrl) else { return nil }
         
-        let fullPath = (self.documentsPath as NSString).appendingPathComponent(fileName)
+        let fullPath = (self.downloadManager.documentsPath as NSString).appendingPathComponent(fileName)
         return URL(fileURLWithPath: fullPath)
     }
     
@@ -210,7 +236,9 @@ class VideoManager: NSObject, URLSessionDelegate, URLSessionDownloadDelegate {
             return nil
         }
         
-        return stringPath.substring(from: stringPath.index(stringPath.startIndex, offsetBy: 7))
+        let startIndex = stringPath.index(stringPath.startIndex, offsetBy: 7)
+        let endIndex = stringPath.endIndex
+        return String(stringPath[startIndex..<endIndex])
     }
     
     /**
@@ -223,7 +251,7 @@ class VideoManager: NSObject, URLSessionDelegate, URLSessionDownloadDelegate {
     func localFileExistsFor(_ video: Video) -> Bool {
         if let urlString = video.streamUrl, let localUrl = self.localFilePathForUrl(urlString) {
             var isDir: ObjCBool = false
-            return self.fileManager.fileExists(atPath: localUrl.path, isDirectory: &isDir)
+            return self.downloadManager.fileManager.fileExists(atPath: localUrl.path, isDirectory: &isDir)
         }
         
         return false
@@ -232,11 +260,11 @@ class VideoManager: NSObject, URLSessionDelegate, URLSessionDownloadDelegate {
     // MARK: - Cleaning up downloads
     
     /// This makes sure that all videos located in the documents folder for DownTube actually have a Video object that they're attached to. This will delete all files not attached to a video.
-    func cleanUpDownloadedFiles(from coreDataController: CoreDataController) {
+    func cleanUpDownloadedFiles(from coreDataController: PersistentVideoStore) {
         let streamUrls = coreDataController.fetchedVideosController.fetchedObjects?.flatMap({ $0.streamUrl }) ?? []
         let filesThatShouldExist = Set(streamUrls.flatMap({ self.fileNameForVideo(withStreamUrl: $0) }))
         
-        let contents = try? self.fileManager.contentsOfDirectory(atPath: self.documentsPath as String)
+        let contents = try? self.downloadManager.fileManager.contentsOfDirectory(atPath: self.downloadManager.documentsPath as String)
         let videosInFolder = Set(contents?.filter({ $0.hasSuffix("mp4") }) ?? [])
         
         let videoFilesToDelete = videosInFolder.subtracting(filesThatShouldExist)
@@ -246,6 +274,24 @@ class VideoManager: NSObject, URLSessionDelegate, URLSessionDownloadDelegate {
         for videoFile in videoFilesToDelete {
             self.deleteDownloadedVideo(withFileName: videoFile)
         }
+    }
+    
+    /// Checks if any video files don't exist and need to be downloaded
+    func checkIfAnyVideosNeedToBeDownloaded() {
+        guard let needToDownload = PersistentVideoStore.shared.createVideosFetchedResultsControllerWithSearch(nil, isDownloaded: false).fetchedObjects, !needToDownload.isEmpty else {
+            return
+        }
+        var indexesToReload: [Int] = []
+        for video in needToDownload {
+            if let index = self.downloadManager.startDownload(video) {
+                indexesToReload.append(index)
+            }
+        }
+        
+        let indexPaths = indexesToReload.map({ IndexPath(row: $0, section: 0) })
+        self.delegate?.reloadRows(indexPaths)
+        
+        print("Index paths that need to be reloaded: \(indexPaths)")
     }
     
     /// Deletes the video file associated with the provided video
@@ -263,13 +309,14 @@ class VideoManager: NSObject, URLSessionDelegate, URLSessionDownloadDelegate {
     /// Uses the filemanager to delete any downloaded video with the stream
     ///
     /// - Parameter fileName: local file name of the file. Shouldn't include any path
-    @discardableResult fileprivate func deleteDownloadedVideo(withFileName fileName: String) -> Bool {
-        let fullPath = (self.documentsPath as NSString).appendingPathComponent(fileName)
+    @discardableResult
+    fileprivate func deleteDownloadedVideo(withFileName fileName: String) -> Bool {
+        let fullPath = (self.downloadManager.documentsPath as NSString).appendingPathComponent(fileName)
         let urlOfFile = URL(fileURLWithPath: fullPath)
         
         do {
             print("Successfully deleted file: \(fileName)")
-            try self.fileManager.removeItem(at: urlOfFile)
+            try self.downloadManager.fileManager.removeItem(at: urlOfFile)
             return true
         } catch let error {
             print("Couldn't delete file \(fileName): \(error.localizedDescription)")
@@ -299,12 +346,12 @@ class VideoManager: NSObject, URLSessionDelegate, URLSessionDownloadDelegate {
         default:                        break
         }
         
-        CoreDataController.sharedController.saveContext()
+        PersistentVideoStore.shared.save()
         
         if let toUrl = toUrl {
             do {
-                try self.fileManager.removeItem(at: toUrl)
-                try self.fileManager.copyItem(at: fromUrl, to: toUrl)
+                try self.downloadManager.fileManager.removeItem(at: toUrl)
+                try self.downloadManager.fileManager.copyItem(at: fromUrl, to: toUrl)
                 print("File moved successfully")
             } catch let error as NSError {
                 print("Could not copy file: \(error.localizedDescription)")
@@ -395,66 +442,5 @@ class VideoManager: NSObject, URLSessionDelegate, URLSessionDownloadDelegate {
         }
         
         return streamUrl
-    }
-    
-    // MARK: - URLSessionDownloadDelegate
-    
-    //Download finished
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        if let originalURL = downloadTask.originalRequest?.url?.absoluteString {
-            
-            if let destinationURL = self.localFilePathForUrl(originalURL) {
-                print("Destination URL: \(destinationURL)")
-                
-                let fileManager = self.fileManager
-                
-                //Removing the file at the path, just in case one exists
-                do {
-                    try fileManager.removeItem(at: destinationURL)
-                } catch {
-                    print("No file to remove. Proceeding...")
-                }
-                
-                //Moving the downloaded file to the new location
-                do {
-                    try fileManager.copyItem(at: location, to: destinationURL)
-                } catch let error as NSError {
-                    print("Could not copy file: \(error.localizedDescription)")
-                }
-                
-                //Updating the cell
-                if let url = downloadTask.originalRequest?.url?.absoluteString {
-                    self.activeDownloads[url] = nil
-                    
-                    if let videoIndex = self.videoIndexForDownloadTask(downloadTask) {
-                        self.delegate?.reloadRows([IndexPath(row: videoIndex, section: 0)])
-                    }
-                }
-            }
-        }
-    }
-    
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-        
-        if let downloadUrl = downloadTask.originalRequest?.url?.absoluteString, let download = self.activeDownloads[downloadUrl] {
-            download.progress = Float(totalBytesWritten)/Float(totalBytesExpectedToWrite)
-            let totalSize = ByteCountFormatter.string(fromByteCount: totalBytesExpectedToWrite, countStyle: ByteCountFormatter.CountStyle.binary)
-            if let trackIndex = self.videoIndexForDownloadTask(downloadTask) {
-                self.delegate?.updateDownloadProgress(download, at: trackIndex, with: totalSize)
-            }
-        }
-    }
-    
-    // MARK: - URLSessionDelegate
-    
-    func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
-        if let appDelegate = UIApplication.shared.delegate as? AppDelegate {
-            if let completionHandler = appDelegate.backgroundSessionCompletionHandler {
-                appDelegate.backgroundSessionCompletionHandler = nil
-                DispatchQueue.main.async(execute: {
-                    completionHandler()
-                })
-            }
-        }
     }
 }

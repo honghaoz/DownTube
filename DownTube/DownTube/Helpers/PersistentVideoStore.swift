@@ -10,8 +10,8 @@ import Foundation
 import CoreData
 import XCDYouTubeKit
 
-class CoreDataController {
-    static let sharedController = CoreDataController()
+class PersistentVideoStore {
+    static let shared = PersistentVideoStore()
 
     // MARK: - Core Data Stack
     
@@ -20,7 +20,7 @@ class CoreDataController {
         if let controller = _fetchedVideosController {
             return controller
         }
-        _fetchedVideosController = self.createControllerWithFetchRequest(Video.fetchRequest())
+        _fetchedVideosController = self.createControllerWithFetchRequest(Video.fetchRequest(), search: nil, isDownloaded: nil)
         return _fetchedVideosController!
     }
     private var _fetchedVideosController: NSFetchedResultsController<Video>?
@@ -30,7 +30,7 @@ class CoreDataController {
         if let controller = _fetchedStreamingVideosController {
             return controller
         }
-        _fetchedStreamingVideosController = self.createControllerWithFetchRequest(StreamingVideo.fetchRequest())
+        _fetchedStreamingVideosController = self.createControllerWithFetchRequest(StreamingVideo.fetchRequest(), search: nil, isDownloaded: nil)
         return _fetchedStreamingVideosController!
     }
     private var _fetchedStreamingVideosController: NSFetchedResultsController<StreamingVideo>?
@@ -39,14 +39,15 @@ class CoreDataController {
     ///
     /// - Parameter fetchRequest: request type that contains the entity
     /// - Returns: fetched results controller
-    private func createControllerWithFetchRequest<T: NSFetchRequestResult>(_ fetchRequest: NSFetchRequest<T>) -> NSFetchedResultsController<T> {
+    func createControllerWithFetchRequest<T>(_ fetchRequest: NSFetchRequest<T>, search: String?, isDownloaded: Bool?) -> NSFetchedResultsController<T> {
         // Set the batch size to a suitable number.
         fetchRequest.fetchBatchSize = 20
         
-        //Order: most recent first
-        let sortDescriptor = NSSortDescriptor(key: "title", ascending: true)
+        //Sort by name
+        let sortDescriptor = NSSortDescriptor(key: "title", ascending: true, selector: #selector(NSString.localizedCaseInsensitiveCompare(_:)))
         
         fetchRequest.sortDescriptors = [sortDescriptor]
+        fetchRequest.predicate = self.predicatesWithSearch(search, isDownloaded: isDownloaded)
         
         // Edit the section name key path and cache name if appropriate.
         // nil for section name key path means "no sections".
@@ -60,6 +61,46 @@ class CoreDataController {
         
         return aFetchedResultsController
     }
+
+    /// Creates a new fetch result controller with the search provided. If no search, returns all
+    ///
+    /// - Parameter search: search to use as an NSPredicate
+    func createVideosFetchedResultsControllerWithSearch(_ search: String?, isDownloaded: Bool?) -> NSFetchedResultsController<Video> {
+        return self.createControllerWithFetchRequest(Video.fetchRequest(), search: search, isDownloaded: isDownloaded)
+    }
+    
+    private func predicatesWithSearch(_ search: String?, isDownloaded: Bool?) -> NSCompoundPredicate {
+        var predicates: [NSPredicate] = []
+        if let search = search, search != "" {
+            //Searching the title
+            let predicate = NSPredicate(format: "title CONTAINS[cd] %@", search)
+            predicates.append(predicate)
+        }
+        
+        if let isDownloadedPredicate = isDownloaded {
+            //Searching if item is downloaded
+            let predicate = NSPredicate(format: "isDoneDownloading == %@", NSNumber(value: isDownloadedPredicate))
+            predicates.append(predicate)
+        }
+        
+        return NSCompoundPredicate(andPredicateWithSubpredicates: predicates) //Doesn't matter if empty
+    }
+    
+    /// Sets the predicate for the fetched videos controller and performs the fetch
+    ///
+    /// - Parameters:
+    ///   - search: search, optional
+    ///   - isDownloaded: if true, only looks for downloaded video
+    func setSearchForDownloadedVideos(_ search: String?, isDownloaded: Bool?) {
+        self.fetchedVideosController.fetchRequest.predicate = self.predicatesWithSearch(search, isDownloaded: isDownloaded)
+        
+        do {
+            try self.fetchedVideosController.performFetch()
+        } catch let error {
+            print("Could not search for videos: \(error)")
+        }
+    }
+    
     
     //Rest of the core data stack
     
@@ -116,12 +157,13 @@ class CoreDataController {
         var newVideo = NSEntityDescription.insertNewObject(forEntityName: Video.entityName, into: self.managedObjectContext) as! Video
         
         newVideo.created = Date()
+        newVideo.isDoneDownloading = NSNumber(value: false)
         newVideo.youtubeUrl = youTubeUrl
         newVideo.title = videoObject?.title
         newVideo.streamUrl = streamUrl
         newVideo.watchProgress = .unwatched
         
-        self.saveContext()
+        self.save()
         
         return newVideo
     }
@@ -134,14 +176,14 @@ class CoreDataController {
         newVideo.streamUrl = streamUrl
         newVideo.watchProgress = .unwatched
         
-        self.saveContext()
+        self.save()
         
         return newVideo
     }
     
     // MARK: - Core Data Saving support
     
-    func saveContext () {
+    func save () {
         if managedObjectContext.hasChanges {
             do {
                 try managedObjectContext.save()

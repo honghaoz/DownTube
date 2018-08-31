@@ -14,8 +14,17 @@ class AppInfoViewController: UIViewController {
     
     @IBOutlet weak var versionLabel: UILabel!
     
+    override var preferredStatusBarStyle: UIStatusBarStyle {
+        return .lightContent
+    }
+    
     override func viewDidLoad() {
         super.viewDidLoad()
+        
+        if #available(iOS 11.0, *) {
+            self.navigationController?.navigationBar.prefersLargeTitles = true
+            self.navigationItem.largeTitleDisplayMode = .always
+        }
         
         self.navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(self.dismissInfoViewController(_:)))
         
@@ -28,6 +37,7 @@ class AppInfoViewController: UIViewController {
      
      - parameter sender: button that sent action
      */
+    @objc
     func dismissInfoViewController(_ sender: AnyObject) {
         self.navigationController?.dismiss(animated: true, completion: nil)
     }
@@ -39,6 +49,8 @@ class AppInfoViewController: UIViewController {
      */
     @IBAction func goToGitHub(_ sender: AnyObject) {
         let vc = SFSafariViewController(url: URL(string: "https://github.com/MrAdamBoyd/DownTube")!, entersReaderIfAvailable: false)
+        vc.preferredBarTintColor = .black
+        vc.preferredControlTintColor = .white
         self.present(vc, animated: true, completion: nil)
     }
 }
