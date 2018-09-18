@@ -9,6 +9,8 @@
 import UIKit
 import CoreData
 import AVFoundation
+import Fabric
+import Crashlytics
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -25,6 +27,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         } catch {
             print("Background audio not enabled")
         }
+
+        Fabric.with([Crashlytics.self])
+        
         return true
     }
 

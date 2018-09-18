@@ -6,6 +6,8 @@ use_frameworks!
 target 'DownTube' do
   pod 'XCDYouTubeKit'
   pod 'MMWormhole'
+  pod 'Fabric'
+  pod 'Crashlytics'
 end
 
 target 'DownTubeShareExtension' do

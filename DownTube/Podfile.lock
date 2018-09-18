@@ -1,17 +1,31 @@
 PODS:
+  - Crashlytics (3.10.5):
+    - Fabric (~> 1.7.9)
+  - Fabric (1.7.9)
   - MMWormhole (2.0.0):
     - MMWormhole/Core (= 2.0.0)
   - MMWormhole/Core (2.0.0)
   - XCDYouTubeKit (2.5.3)
 
 DEPENDENCIES:
+  - Crashlytics
+  - Fabric
   - MMWormhole
   - XCDYouTubeKit
 
+SPEC REPOS:
+  https://github.com/cocoapods/specs.git:
+    - Crashlytics
+    - Fabric
+    - MMWormhole
+    - XCDYouTubeKit
+
 SPEC CHECKSUMS:
+  Crashlytics: 7f2e38d302d9da96475b3d64d86fb29e31a542b7
+  Fabric: a2917d3895e4c1569b9c3170de7320ea1b1e6661
   MMWormhole: 0cd3fd35a9118b2e2d762b499f54eeaace0be791
   XCDYouTubeKit: 90690f9e3523735dc93b8024269d991b0cfffe78
 
-PODFILE CHECKSUM: 07b87e2cd774d383698b8873bd9a3da701e9874c
+PODFILE CHECKSUM: 063485ea8c7deafb72547c00be59b91edefaa4fc
 
-COCOAPODS: 1.0.1
+COCOAPODS: 1.5.3
