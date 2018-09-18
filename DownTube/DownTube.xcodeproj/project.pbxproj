@@ -456,7 +456,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "\"${PODS_ROOT}/Fabric/run\" d3ec53bc16086eec715f67dbf095bf3be047762c 37b6e8e6a6b6beb34ee493bc8a85ab2ce06e2be2d913f04406cda5d9f8deae20\n";
+			shellScript = "\"${PODS_ROOT}/Fabric/run\" ca155c24ed48827495091aa98a4e30334e8a37cc 6ac708df5830b4d440eb0e77bf55b6229c124ebf12a9a933561611c0ff44b9a3\n";
 		};
 		20DFF6F256332C1768AE99FA /* [CP] Check Pods Manifest.lock */ = {
 			isa = PBXShellScriptBuildPhase;
