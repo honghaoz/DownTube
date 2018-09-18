@@ -19,7 +19,7 @@ private let downloadingCellRowHeight: CGFloat = 92
 
 class MasterViewController: UITableViewController, VideoEditingHandlerDelegate, NSFetchedResultsControllerDelegate {
     
-    let wormhole = MMWormhole(applicationGroupIdentifier: "group.honghaoz.DownTube", optionalDirectory: nil)
+    let wormhole = MMWormhole(applicationGroupIdentifier: "group.chouti.downtube", optionalDirectory: nil)
     
     var videoManager: VideoManager!
     var fileManager: FileManager = .default
